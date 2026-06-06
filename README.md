@@ -27,15 +27,18 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-**Velog access_token 발급 방법**
+**토큰 발급 방법**
 
 1. 브라우저에서 [velog.io](https://velog.io) 로그인
 2. F12 → Application → Cookies → `https://velog.io`
-3. `access_token` 값 복사 후 `.env`에 붙여넣기
+3. `access_token`, `refresh_token` 값을 각각 복사해 `.env`에 붙여넣기
 
 ```
-VELOG_ACCESS_TOKEN=여기에_토큰_붙여넣기
+VELOG_ACCESS_TOKEN=여기에_access_token_붙여넣기
+VELOG_REFRESH_TOKEN=여기에_refresh_token_붙여넣기
 ```
+
+> **access_token이 만료되면 자동으로 갱신됩니다.** refresh_token까지 만료된 경우에만 위 과정을 다시 진행하면 됩니다.
 
 ## 사용법
 
@@ -57,10 +60,10 @@ private: false
 
 **frontmatter 옵션**
 
-- 'title' : 포스트 제목(필수 입력)
-- 'tags' : 태그 목록(Default = [])
-- 'private' : 비공개 여부(Default = false)
-- 'temp' : 임시저장 여부(Default = false)
+- `title` : 포스트 제목 (필수 입력)
+- `tags` : 태그 목록 (Default = [])
+- `private` : 비공개 여부 (Default = false)
+- `temp` : 임시저장 여부 (Default = false)
 
 ### 2. 업로드
 
