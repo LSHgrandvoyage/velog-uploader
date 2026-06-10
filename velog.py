@@ -80,6 +80,42 @@ def _gql(query: str, variables: dict, _retried: bool = False) -> dict:
     return data["data"]
 
 
+def _get_username() -> str:
+    query = """
+    query CurrentUser {
+      currentUser {
+        username
+      }
+    }
+    """
+    result = _gql(query, {})
+    user = result["currentUser"]
+    if not user:
+        raise RuntimeError("로그인 정보를 확인할 수 없습니다. 토큰을 확인하세요.")
+    return user["username"]
+
+
+def _get_series_id(series_name: str) -> str:
+    username = _get_username()
+    query = """
+    query SeriesList($input: GetSeriesListInput!) {
+      seriesList(input: $input) {
+        id
+        name
+      }
+    }
+    """
+    result = _gql(query, {"input": {"username": username}})
+    for series in result["seriesList"]:
+        if series["name"] == series_name:
+            return series["id"]
+
+    raise ValueError(
+        f"시리즈 '{series_name}'를 찾을 수 없습니다. "
+        "velog.io에서 해당 시리즈를 먼저 만들어주세요 (API로는 시리즈 생성이 불가능합니다)."
+    )
+
+
 def _make_slug(title: str) -> str:
     slug = title.lower()
     slug = re.sub(r"[^\w\s-]", "", slug)
@@ -109,6 +145,7 @@ def upload_post(
     tags: list[str] = [],
     is_private: bool = False,
     is_temp: bool = False,
+    series: str | None = None,
 ) -> dict:
     mutation = """
     mutation WritePost($input: WritePostInput!) {
@@ -120,6 +157,8 @@ def upload_post(
       }
     }
     """
+    series_id = _get_series_id(series) if series else None
+
     variables = {
         "input": {
             "title": title,
@@ -131,7 +170,7 @@ def upload_post(
             "url_slug": _make_slug(title),
             "thumbnail": None,
             "meta": {},
-            "series_id": None,
+            "series_id": series_id,
         }
     }
     result = _gql(mutation, variables)
@@ -164,6 +203,7 @@ def main():
         tags=meta.get("tags", []),
         is_private=meta.get("private", False),
         is_temp=meta.get("temp", False),
+        series=meta.get("series"),
     )
 
 

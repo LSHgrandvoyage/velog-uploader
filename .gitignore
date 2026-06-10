@@ -2,3 +2,6 @@
 .venv/
 __pycache__/
 *.pyc
+
+# 개인 작업용 메모/원고 (예: 00-overview.md, 01-foo.md)
+[0-9][0-9]-*.md

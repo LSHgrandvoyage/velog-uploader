@@ -2,6 +2,7 @@
 title: 예시 포스트 제목
 tags: [태그1, 태그2]
 private: true
+series: 시리즈 이름
 ---
 
 ## 여기서부터 본문

@@ -51,6 +51,7 @@ VELOG_REFRESH_TOKEN=여기에_refresh_token_붙여넣기
 title: 포스트 제목
 tags: [태그1, 태그2]
 private: false
+series: 시리즈 이름
 ---
 
 ## 본문 시작
@@ -64,6 +65,7 @@ private: false
 - `tags` : 태그 목록 (Default = [])
 - `private` : 비공개 여부 (Default = false)
 - `temp` : 임시저장 여부 (Default = false)
+- `series` : 시리즈 이름 (Default = 없음). velog.io에 동일한 이름의 시리즈가 미리 존재해야 합니다 (API로 시리즈 생성은 불가능).
 
 ### 2. 업로드
 
