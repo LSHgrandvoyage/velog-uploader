@@ -1,6 +1,11 @@
 import os
 import re
 import sys
+import time
+import email
+import imaplib
+from email.utils import parsedate_to_datetime
+
 import yaml
 import requests
 from dotenv import load_dotenv, set_key
@@ -8,7 +13,12 @@ from dotenv import load_dotenv, set_key
 load_dotenv()
 
 GRAPHQL_URL = "https://v3.velog.io/graphql"
+AUTH_HOST = "https://api.velog.io"
+IMAP_HOST = "imap.gmail.com"
 ENV_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+
+# velog 로그인 메일에 담긴 링크: https://velog.io/email-login?code=<코드>
+LOGIN_CODE_RE = re.compile(r"email-login\?code=([A-Za-z0-9_-]+)")
 
 _tokens = {
     "access": os.getenv("VELOG_ACCESS_TOKEN", ""),
@@ -41,12 +51,10 @@ def _restore_token() -> None:
     resp.raise_for_status()
     data = resp.json()
 
-    if "errors" in data:
-        raise RuntimeError(
-            "refresh_token도 만료됐습니다. 브라우저에서 다시 로그인 후 두 토큰 모두 재복사하세요."
-        )
+    result = data.get("data", {}).get("restoreToken") if "errors" not in data else None
+    if not result or not result.get("accessToken"):
+        raise RuntimeError("refresh_token이 만료됐습니다(유효기간 3일).")
 
-    result = data["data"]["restoreToken"]
     _tokens["access"] = result["accessToken"]
     _tokens["refresh"] = result["refreshToken"]
 
@@ -80,7 +88,12 @@ def _gql(query: str, variables: dict, _retried: bool = False) -> dict:
     return data["data"]
 
 
-def _get_username() -> str:
+def _current_username() -> str | None:
+    """현재 access_token으로 로그인된 username을 반환한다.
+
+    velog는 access_token이 만료/무효일 때 errors 없이 currentUser=null을
+    돌려주므로, 인증 실패는 None으로 나타난다.
+    """
     query = """
     query CurrentUser {
       currentUser {
@@ -90,13 +103,157 @@ def _get_username() -> str:
     """
     result = _gql(query, {})
     user = result["currentUser"]
-    if not user:
-        raise RuntimeError("로그인 정보를 확인할 수 없습니다. 토큰을 확인하세요.")
-    return user["username"]
+    return user["username"] if user else None
 
 
-def _get_series_id(series_name: str) -> str:
-    username = _get_username()
+def _ensure_auth() -> str:
+    """업로드 전에 인증을 보장하고 로그인된 username을 반환한다.
+
+    1) access_token이 살아있으면 그대로 사용
+    2) 만료됐으면 refresh_token으로 갱신
+    3) 그것도 만료됐으면 이메일 매직링크 로그인으로 토큰을 새로 발급 (무인)
+    """
+    username = _current_username()
+    if username:
+        return username
+
+    if _tokens["refresh"]:
+        print("access_token 만료 — refresh_token으로 갱신 중...")
+        try:
+            _restore_token()
+            username = _current_username()
+            if username:
+                return username
+        except Exception as e:
+            print(f"refresh_token 갱신 실패: {e}")
+
+    print("토큰이 모두 만료됨 — 이메일 로그인으로 재발급합니다...")
+    _email_login()
+    username = _current_username()
+    if not username:
+        raise RuntimeError("이메일 로그인 후에도 인증에 실패했습니다.")
+    return username
+
+
+def _email_login() -> None:
+    """velog 이메일 매직링크 로그인을 자동 수행해 토큰을 발급받는다.
+
+    sendmail 요청 → Gmail(IMAP) 폴링으로 코드 추출 → code 교환 → .env 저장.
+    """
+    velog_email = os.getenv("VELOG_EMAIL", "")
+    app_pw = os.getenv("GMAIL_APP_PASSWORD", "")
+    if not velog_email or not app_pw:
+        raise RuntimeError(
+            "이메일 자동 로그인 설정이 없습니다. .env에 VELOG_EMAIL과 "
+            "GMAIL_APP_PASSWORD를 추가하세요.\n"
+            "앱 비밀번호: 구글 계정 → 보안 → 2단계 인증 → 앱 비밀번호"
+        )
+
+    sent_at = time.time()
+    _send_login_mail(velog_email)
+    code = _wait_for_login_code(velog_email, app_pw, since=sent_at)
+    _exchange_code(code)
+
+
+def _send_login_mail(email_addr: str) -> None:
+    resp = requests.post(
+        f"{AUTH_HOST}/api/v2/auth/sendmail",
+        json={"email": email_addr},
+        headers={"Content-Type": "application/json"},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if not data.get("registered", False):
+        raise RuntimeError(
+            f"'{email_addr}'로 가입된 velog 계정이 없습니다. VELOG_EMAIL을 확인하세요."
+        )
+    print(f"{email_addr}로 로그인 메일 발송 — 도착 대기 중...")
+
+
+def _wait_for_login_code(
+    imap_user: str, imap_pw: str, since: float, timeout: int = 90, interval: int = 5
+) -> str:
+    """verify@velog.io가 보낸 최신 로그인 메일에서 코드를 추출한다."""
+    deadline = time.time() + timeout
+    with imaplib.IMAP4_SSL(IMAP_HOST) as M:
+        M.login(imap_user, imap_pw)
+        while time.time() < deadline:
+            # 스팸/프로모션함으로 분류될 수 있어 전체 메일함까지 검색
+            for mailbox in ('"[Gmail]/All Mail"', "INBOX"):
+                try:
+                    typ, _ = M.select(mailbox)
+                    if typ != "OK":
+                        continue
+                except imaplib.IMAP4.error:
+                    continue
+
+                typ, data = M.search(None, "FROM", "verify@velog.io", "UNSEEN")
+                if typ != "OK" or not data or not data[0]:
+                    continue
+
+                for mid in reversed(data[0].split()):
+                    typ, msg_data = M.fetch(mid, "(RFC822)")
+                    if typ != "OK":
+                        continue
+                    msg = email.message_from_bytes(msg_data[0][1])
+
+                    # sendmail 호출 이전에 온 옛 메일은 무시 (재사용 방지)
+                    try:
+                        msg_ts = parsedate_to_datetime(msg["Date"]).timestamp()
+                        if msg_ts < since - 120:
+                            continue
+                    except (TypeError, ValueError):
+                        pass
+
+                    code = _extract_code(msg)
+                    if code:
+                        M.store(mid, "+FLAGS", "\\Seen")
+                        return code
+            time.sleep(interval)
+
+    raise RuntimeError(
+        "로그인 메일을 시간 내에 받지 못했습니다. 스팸함과 VELOG_EMAIL을 확인하세요."
+    )
+
+
+def _extract_code(msg: email.message.Message) -> str | None:
+    for part in msg.walk():
+        if part.get_content_type() not in ("text/plain", "text/html"):
+            continue
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            continue
+        text = payload.decode(part.get_content_charset() or "utf-8", "ignore")
+        m = LOGIN_CODE_RE.search(text)
+        if m:
+            return m.group(1)
+    return None
+
+
+def _exchange_code(code: str) -> None:
+    resp = requests.get(
+        f"{AUTH_HOST}/api/v2/auth/code/{code}",
+        headers={"Content-Type": "application/json"},
+        timeout=10,
+    )
+    if resp.status_code == 404:
+        raise RuntimeError("로그인 코드가 유효하지 않습니다.")
+    resp.raise_for_status()
+    data = resp.json()
+
+    tokens = data.get("tokens")
+    if not tokens or not tokens.get("access_token"):
+        raise RuntimeError(f"토큰 발급 실패: {str(data)[:200]}")
+
+    _tokens["access"] = tokens["access_token"]
+    _tokens["refresh"] = tokens["refresh_token"]
+    set_key(ENV_FILE, "VELOG_ACCESS_TOKEN", _tokens["access"])
+    set_key(ENV_FILE, "VELOG_REFRESH_TOKEN", _tokens["refresh"])
+    print("이메일 로그인 완료 — 토큰 재발급 및 저장 완료")
+
+
+def _get_series_id(series_name: str, username: str) -> str:
     query = """
     query SeriesList($input: GetSeriesListInput!) {
       seriesList(input: $input) {
@@ -146,6 +303,7 @@ def upload_post(
     is_private: bool = False,
     is_temp: bool = False,
     series: str | None = None,
+    description: str | None = None,
 ) -> dict:
     mutation = """
     mutation WritePost($input: WritePostInput!) {
@@ -157,7 +315,8 @@ def upload_post(
       }
     }
     """
-    series_id = _get_series_id(series) if series else None
+    username = _ensure_auth()
+    series_id = _get_series_id(series, username) if series else None
 
     variables = {
         "input": {
@@ -169,7 +328,7 @@ def upload_post(
             "is_private": is_private,
             "url_slug": _make_slug(title),
             "thumbnail": None,
-            "meta": {},
+            "meta": {"short_description": description} if description else {},
             "series_id": series_id,
         }
     }
@@ -204,6 +363,7 @@ def main():
         is_private=meta.get("private", False),
         is_temp=meta.get("temp", False),
         series=meta.get("series"),
+        description=meta.get("description"),
     )
 
 

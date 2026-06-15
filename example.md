@@ -3,6 +3,7 @@ title: 예시 포스트 제목
 tags: [태그1, 태그2]
 private: true
 series: 시리즈 이름
+description: 포스트 목록에서 보일 짧은 소개 문구
 ---
 
 ## 여기서부터 본문
