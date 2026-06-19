@@ -5,3 +5,6 @@ __pycache__/
 
 # 개인 작업용 메모/원고 (예: 00-overview.md, 01-foo.md)
 [0-9][0-9]-*.md
+
+# velog 업로드용 원고 보관소 (시리즈별 디렉토리)
+md_files/
