@@ -63,6 +63,21 @@ GMAIL_APP_PASSWORD=구글_앱_비밀번호_16자리
 3일에 한 번이라도 업로드하면 갱신 체인이 유지되고, 그보다 오래 쉬어도
 이메일 로그인이 무인으로 복구합니다.
 
+**3. 썸네일 설정 (선택)**
+
+시리즈별 대표 이미지를 자동으로 적용할 수 있습니다. 썸네일 이미지를 모아둘 폴더를
+`.env`에 지정하고, 파일명을 `<시리즈명>_thumbnail.<확장자>` 형태로 저장합니다.
+
+```
+THUMBNAIL_DIR=/path/to/thumbnails
+```
+
+- 파일명의 `<시리즈명>`은 frontmatter `series` 값과 일치해야 합니다 (대소문자 무시).
+  예: 시리즈가 `Velog auto uploader 개발기`이면 → `Velog auto uploader 개발기_thumbnail.jpg`
+- 확장자는 자동 탐색합니다 (`.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`).
+- `THUMBNAIL_DIR`이 비어있거나 일치하는 파일이 없으면 썸네일 없이 업로드됩니다.
+- 썸네일은 `series`로 매칭되므로 frontmatter에 별도 필드를 적지 않습니다.
+
 ## 사용법
 
 ### 1. 마크다운 파일 작성
